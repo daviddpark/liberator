@@ -10,8 +10,7 @@
   (:require [liberator.conneg :as conneg])
   (:use
    [liberator.util :only [parse-http-date http-date]]
-   [liberator.representation :only [Representation as-response]]
-   [clojure.tools.trace :only [trace]])
+   [liberator.representation :only [Representation as-response]])
   (:import (javax.xml.ws ProtocolException)))
 
 (defprotocol DateCoercions
@@ -43,26 +42,25 @@
 ;; todos
 ;; make authorized handler returning single value (not map) as identifier of a principal
 
-(def console-logger #(println (str "LOG " %)))
+(def console-logger #(println "LOG" %1))
 (def no-logger (constantly nil))
 
-(declare ^:dynamic *-log*)
-
-(def ^:dynamic *-logger* no-logger)
-
-(def var-logger (fn [msg] (dosync (alter *-log* #(conj % msg)))))
+(def ^:dynamic ^:private *log-fn* no-logger)
 
 (defn log [name value]
-  (do
-    (*-logger* (str name ": " (pr-str value)))
-    value))
+  (do (*log-fn* (str name ": " value)) value))
 
-(defn make-trace-headers [log]
-  log)
+(defn make-trace-headers [log] log)
+
+(defmacro with-logger [log-fn & body]
+  `(binding [*log-fn* ~log-fn] ~@body))
 
 (defmacro with-console-logger [& body]
-  `(binding [*-logger* console-logger]
-     ~@body))
+  `(with-logger console-logger ~@body))
+
+(def ^:dynamic ^:private *request-trace*)
+(defn trace! [decision result]
+  (swap! *request-trace* conj [decision result]))
 
 (declare if-none-match-exists?)
 
@@ -107,6 +105,7 @@
 	  context-update (if (vector? decision) (second decision) decision)
 	  context (if (map? context-update)
                     (merge-with merge-map-element context context-update) context)]
+      (trace! name result)
       ((if result fthen felse) context))
     {:status 500 :body (str "No handler found for key \""  name "\"."
                             " Keys defined for resource are " (keys resource))}))
@@ -538,10 +537,13 @@
 ;; resources are a map of implementation methods
 (defn run-resource [request kvs]
   (try
-    (service-available? {:request request
-                         :resource
-                         (map-values make-function (merge default-functions kvs))
-                         :representation {}})
+    (binding [*request-trace* (atom [])]
+      (assoc-in 
+       (service-available? {:request request
+                            :resource
+                            (map-values make-function (merge default-functions kvs))
+                            :representation {}})
+       [:headers "X-Liberator-Trace"] (make-trace-headers (map str @*request-trace*)) ))
     
     (catch ProtocolException e         ; this indicates a client error
       {:status 400
@@ -564,11 +566,22 @@
 
 (defn wrap-trace-as-response-header [handler]
   (fn [request]
-    (binding [*-log* (ref [])
-              *-logger* var-logger]
+    (binding [*-log* (atom [])]
       (let [resp (handler request)]
         (when resp
-          (assoc-in resp [:headers "X-Liberator-Trace"] (make-trace-headers @*-log*)))))))
+          (assoc-in resp [:headers "X-Liberator-Log"] (make-trace-headers @*-log*)))))))
 
 (defn get-trace []
   (make-trace-headers @*-log*))
+
+
+(defn by-method
+  "returns a handler function that uses the request method to
+   lookup a function from the map and delegates to it.
+
+   Example:
+
+   (by-method {:get \"This is the entity\"
+               :delete \"Entity was deleted successfully.\"})"
+  [map]
+  (fn [ctx] ((make-function (get map (get-in ctx [:request :request-method]) ctx)) ctx)))
