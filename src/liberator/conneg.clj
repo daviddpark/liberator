@@ -203,10 +203,10 @@
 ;; TODO Add tracing
 
 (defn best-allowed-charset [accepts-header available]
-  (let [accepts (->> (string/split accepts-header #"\s*,\s*")
+  (let [accepts (->> (string/split (string/lower-case accepts-header) #"\s*,\s*")
                      (map split-qval)
                      (into {}))]
-    (select-best available
+    (select-best (map string/lower-case available)
                  (fn [charset]
                    (or (get accepts charset)
                        (get accepts "*")
