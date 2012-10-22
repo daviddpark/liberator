@@ -1,12 +1,11 @@
 (ns test-conneg
   (:require [clojure.string :as string])
-  (:use
-   liberator.conneg
-   midje.sweet))
+  (:use liberator.conneg
+        checkers
+        midje.sweet))
 
 (facts "charsets"
-
-  (tabular (fact (best-allowed-charset accept available) => negotiated)
+       (tabular (fact (best-allowed-charset accept available) => (ignore-case negotiated))
 
            accept                            available                   negotiated
 
